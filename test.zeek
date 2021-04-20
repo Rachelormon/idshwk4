@@ -1,29 +1,35 @@
-@load base/frameworks/sumstats
 event zeek_init()
     {
-    local r1 = SumStats::Reducer($stream="404_response", $apply=set(SumStats::UNIQUE));
-    local r2 = SumStats::Reducer($stream="response", $apply=set(SumStats::UNIQUE));
-    SumStats::create([$name="http_scan",
-                      $epoch=10mins,
-                      $reducers=set(r1,r2),
+    local r1 = SumStats::Reducer($stream="http_response", $apply=set(SumStats::SUM));
+    local r2 = SumStats::Reducer($stream="response404", $apply=set(SumStats::SUM));
+    local r3 = SumStats::Reducer($stream="http_UNIQUE_404_response", $apply=set(SumStats::UNIQUE));
+
+    SumStats::create([$name="dns.requests.unique",
+                      $epoch=10min,
+                      $reducers=set(r1,r2,r3),
                       $epoch_result(ts: time, key: SumStats::Key, result: SumStats::Result) =
                         {
-                        local ru1 = result["404_response"];
-                        local ru2 = result["response"];
-                        if (ru1$num > 2){
-					      if (ru1$num / ru2$num > 0.2){
-						    if (ru1$unique / ru1$num > 0.5){
-							print fmt("%s is a scanner with %d scan attemps on %d urls", key$host, ru1$num, ru1$unique);
-					        }
-					      }
-					    }
+                        local R1 = result["http_response"];
+                        local R2 = result["response404"];
+                        local R3 = result["http_UNIQUE_404_response"];
+                        if (R2$num > 2)
+                        {
+                            if((R2$num*1.0)/(R1$num*1.0) > 0.2)
+                            {
+                                if((R3$unique*1.0)/(R2$num*1.0)>0.5)
+                                    print fmt("%s is a scanner with %.0f scan attemps on %d urls",key$host,R2$num,R3$unique);
+                            }
+                        }
                         }]);
     }
 
-event http_reply(c: connection, version: string, code: count, reason: string)
+
+event http_reply(c:connection,version:string,code:count,reason:string)
+{
+    if (c$http$status_code == 404)
     {
-    SumStats::observe("response", [$host = c$id$orig_h], [$str = c$http$uri]);
-	if (code == 404){
-		SumStats::observe("404_response", [$host = c$id$orig_h], [$str = c$http$uri]);
+        SumStats::observe("response404", SumStats::Key($host=c$id$orig_h), SumStats::Observation($num=1));
+        SumStats::observe("http_UNIQUE_404_response", SumStats::Key($host=c$id$orig_h), SumStats::Observation($str=c$http$uri));
     }
-    }
+    SumStats::observe("http_response", SumStats::Key($host=c$id$orig_h), SumStats::Observation($num=1));
+}
